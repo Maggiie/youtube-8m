@@ -18,6 +18,7 @@ import math
 import models
 import tensorflow as tf
 import utils
+import video_level_models
 
 from tensorflow import flags
 import tensorflow.contrib.slim as slim
@@ -26,6 +27,8 @@ FLAGS = flags.FLAGS
 flags.DEFINE_integer(
     "moe_num_mixtures", 2,
     "The number of mixtures (excluding the dummy 'expert') used for MoeModel.")
+flags.DEFINE_integer("stacking_pca_size", 1024,
+                     "Number of units in the Stacking PCA layer.")
 
 class LogisticModel(models.BaseModel):
   """Logistic model with L2 regularization."""
@@ -45,6 +48,36 @@ class LogisticModel(models.BaseModel):
         model_input, vocab_size, activation_fn=tf.nn.sigmoid,
         weights_regularizer=slim.l2_regularizer(l2_penalty))
     return {"predictions": output}
+
+class StackingModel(models.BaseModel):
+  """The Stacking Model"""
+
+  def create_model(self, model_input, vocab_size, l2_penalty=1e-8, **unused_params):
+    """Creates a logistic model.
+
+    Args:
+      model_input: 'batch' x 'num_features' matrix of input features.
+      vocab_size: The number of classes in the dataset.
+
+    Returns:
+      A dictionary with a tensor containing the probability predictions of the
+      model in the 'predictions' key. The dimensions of the tensor are
+      batch_size x num_classes."""
+    output1 = slim.fully_connected(
+        model_input, vocab_size, activation_fn=tf.nn.sigmoid,
+        weights_regularizer=slim.l2_regularizer(l2_penalty))
+    output2 = slim.fully_connected(
+        model_input, vocab_size, activation_fn=tf.nn.relu6,
+        weights_regularizer=slim.l2_regularizer(l2_penalty))
+
+    merged_input = tf.concat([model_input, output1, output2], 1)
+
+    aggregated_model = getattr(video_level_models,
+                               FLAGS.video_level_classifier_model)
+
+    return aggregated_model().create_model(
+        model_input=merged_input,
+        vocab_size=vocab_size)
 
 class MoeModel(models.BaseModel):
   """A softmax over a mixture of logistic models (with L2 regularization)."""
